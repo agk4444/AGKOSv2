@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AGKOS v0.1 — browser terminal</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #0b0e14; color: #d6deeb;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    padding: 10px 14px; border-bottom: 1px solid #1e2530;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  #status { font-size: 12px; color: #7f8ba0; }
+  #bootBtn {
+    font: inherit; font-size: 13px; cursor: pointer;
+    background: #1d7a3a; color: #fff; border: none; border-radius: 6px;
+    padding: 7px 16px;
+  }
+  #bootBtn:disabled { background: #334155; cursor: default; }
+  #term {
+    flex: 1; overflow-y: auto; padding: 12px 14px;
+    white-space: pre-wrap; word-break: break-word;
+    font-size: 14px; line-height: 1.45; background: #0b0e14;
+  }
+  #inputRow {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-top: 1px solid #1e2530; background: #0d1119;
+  }
+  #promptLabel { color: #4ec9b0; font-weight: 600; font-size: 14px; }
+  #cmd {
+    flex: 1; font: inherit; font-size: 14px;
+    background: #11161f; color: #d6deeb;
+    border: 1px solid #2a3342; border-radius: 6px; padding: 8px 10px;
+  }
+  #cmd:focus { outline: none; border-color: #4ec9b0; }
+  #runBtn {
+    font: inherit; font-size: 13px; cursor: pointer;
+    background: #2563eb; color: #fff; border: none; border-radius: 6px;
+    padding: 8px 16px;
+  }
+  .err { color: #f87171; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AGKOS v0.1 — browser terminal</h1>
+  <button id="bootBtn">Boot</button>
+  <span id="status">press Boot to start</span>
+</header>
+<div id="term" aria-live="polite"></div>
+<div id="inputRow">
+  <span id="promptLabel">agk&gt;</span>
+  <input id="cmd" type="text" autocomplete="off" autocapitalize="off"
+         spellcheck="false" placeholder="type a command, press Enter" disabled>
+  <button id="runBtn">Run</button>
+</div>
+
+<script>
+"use strict";
+/* Embedded AGKOS bundle: Python source compiled from the repo's .agk files,
+   injected by web/build_terminal.py as a JSON-escaped JS string. */
+const BUNDLE_SRC = /*__AGK_BUNDLE__*/(void 0);
+
+const termEl   = document.getElementById('term');
+const cmdInput = document.getElementById('cmd');
+const bootBtn  = document.getElementById('bootBtn');
+const runBtn   = document.getElementById('runBtn');
+const statusEl = document.getElementById('status');
+
+function setStatus(s) { statusEl.textContent = s; }
+
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function termWrite(s) {
+  const span = document.createElement('span');
+  span.innerHTML = escHtml(String(s)).replace(/\n/g, '<br>');
+  termEl.appendChild(span);
+  termEl.scrollTop = termEl.scrollHeight;
+}
+function termError(s) {
+  const span = document.createElement('span');
+  span.className = 'err';
+  span.innerHTML = escHtml(String(s)).replace(/\n/g, '<br>');
+  termEl.appendChild(span);
+  termEl.scrollTop = termEl.scrollHeight;
+}
+
+/* Promise queue bridging Python's input() to the on-page command box.
+   Each __ainput() call pushes one resolver; Enter resolves the oldest. */
+const _waiters = [];
+function waitForLine() {
+  return new Promise((resolve) => {
+    _waiters.push(resolve);
+    cmdInput.disabled = false;   /* first prompt has arrived: enable input */
+    cmdInput.focus();
+  });
+}
+/* Expose to Pyodide's `js` module so Python can call js.termWrite / js.waitForLine */
+globalThis.termWrite = termWrite;
+globalThis.waitForLine = waitForLine;
+
+function submitLine() {
+  if (_waiters.length === 0) return;   /* no prompt pending: ignore */
+  const val = cmdInput.value;
+  cmdInput.value = '';
+  termWrite(val + '\n');               /* echo the typed line */
+  _waiters.shift()(val);
+}
+cmdInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); submitLine(); }
+});
+runBtn.addEventListener('click', () => { cmdInput.focus(); submitLine(); });
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('script load failed: ' + src));
+    document.head.appendChild(s);
+  });
+}
+async function loadPyodideWithFallback() {
+  const urls = [
+    'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js',
+    'https://unpkg.com/pyodide@0.26.4/full/pyodide.js'
+  ];
+  let lastErr = null;
+  for (const u of urls) {
+    try {
+      await loadScript(u);
+      if (typeof loadPyodide !== 'function') throw new Error('loadPyodide missing');
+      return await loadPyodide();
+    } catch (e) { lastErr = e; }
+  }
+  throw new Error('Could not load Pyodide 0.26.4 from any CDN (' + lastErr + ')');
+}
+
+/* Build the async driver from the embedded bundle:
+   rewrite blocking input() into awaited _ainput(), make the shell loop
+   and main() async, await the shell, drop the __main__ runner block.
+   (Single-underscore helper: a __dunder name inside class Shell would be
+   name-mangled to _Shell__... and NameError at runtime.) */
+function buildDriver() {
+  const driver = BUNDLE_SRC
+    .replace(/\binput\(/g, 'await _ainput(')
+    .replace(/def run\(self\):/g, 'async def run(self):')
+    .replace(/def main\(\):/g, 'async def main():')
+    .replace(/sh\.run\(\)/g, 'await sh.run()')
+    .replace(/if __name__ == "__main__":[\s\S]*$/, '');
+  const preamble =
+    'import asyncio, js\n' +
+    '_input_waiters = []\n' +
+    'async def _ainput(prompt=""):\n' +
+    '    js.termWrite(str(prompt))\n' +
+    '    line = await js.waitForLine()\n' +
+    '    return str(line)\n';
+  return preamble + driver + '\nawait main()\n';
+}
+
+let booted = false;
+bootBtn.addEventListener('click', async () => {
+  if (booted) return;
+  booted = true;
+  bootBtn.disabled = true;
+  if (!BUNDLE_SRC) {
+    setStatus('ERROR: no OS bundle embedded');
+    termError('ERROR: terminal.html was built without the AGKOS bundle.\n');
+    return;
+  }
+  setStatus('loading Pyodide\u2026');
+  let pyodide;
+  try {
+    pyodide = await loadPyodideWithFallback();
+  } catch (e) {
+    setStatus('ERROR: Pyodide failed to load');
+    termError('ERROR: ' + e.message + '\n');
+    booted = false;
+    bootBtn.disabled = false;
+    return;
+  }
+  pyodide.setStdout({ batched: (s) => termWrite(s) });
+  pyodide.setStderr({ batched: (s) => termWrite(s) });
+  setStatus('booting AGKOS\u2026');
+  try {
+    await pyodide.runPythonAsync(buildDriver());
+    setStatus('halted');
+    cmdInput.disabled = true;
+  } catch (e) {
+    termError('\n[python error] ' + (e && e.message ? e.message : e) + '\n');
+    setStatus('error');
+  }
+});
+</script>
+</body>
+</html>

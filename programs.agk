@@ -53,3 +53,83 @@ define class WriterProg:
         k.sys_write_file(path, "log line {n}")
         k.sys_print("writer: wrote line {n} to {path}")
         return n < target
+
+
+define class SleeperProg:
+    variable k as Object
+    variable rounds as Integer
+    variable n as Integer
+
+    define constructor that takes kernel as Object, r as Integer:
+        set k to kernel
+        set rounds to r
+        set n to 0
+
+    define function tick:
+        set n to n + 1
+        k.sys_print("sleeper: hello {n}")
+        k.sys_sleep(3)
+        set rounds to rounds - 1
+        return rounds > 0
+
+
+define class EchoerProg:
+    variable k as Object
+
+    define constructor that takes kernel as Object:
+        set k to kernel
+
+    define function tick:
+        create msg as Object
+        set msg to k.sys_recv()
+        if msg != "":
+            k.sys_print("echoer got: {msg}")
+        return true
+
+
+define class TalkerProg:
+    variable k as Object
+    variable target_name as String
+    variable count as Integer
+    variable n as Integer
+
+    define constructor that takes kernel as Object, tname as String, c as Integer:
+        set k to kernel
+        set target_name to tname
+        set count to c
+        set n to 0
+
+    define function tick:
+        set n to n + 1
+        create pid as Object
+        set pid to k.sys_lookup(target_name)
+        if pid >= 0:
+            k.sys_print("talker: ping {n} -> {target_name}")
+            k.sys_send(pid, "ping {n} from talker")
+        else:
+            k.sys_print("talker: {target_name} not found")
+        return n < count
+
+
+define class NetProg:
+    variable k as Object
+    variable target as String
+    variable count as Integer
+    variable n as Integer
+
+    define constructor that takes kernel as Object, tgt as String, c as Integer:
+        set k to kernel
+        set target to tgt
+        set count to c
+        set n to 0
+
+    define function tick:
+        set n to n + 1
+        create r as Object
+        set r to ""
+        try:
+            set r to k.sys_ping(target)
+            k.sys_print("netprobe: {r}")
+        catch e:
+            k.sys_print("netprobe: {e}")
+        return n < count

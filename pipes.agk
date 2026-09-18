@@ -1,0 +1,46 @@
+# AGKOS message pipes: per-process inboxes (pid -> list of messages).
+# Processes send with kernel sys_send and drain with sys_recv.
+
+define class InboxTable:
+    variable boxes as Object
+
+    define constructor:
+        create b as Object
+        set b to dict()
+        set boxes to b
+
+    define function ensure that takes pid as Integer:
+        try:
+            create b as Object
+            set b to boxes[pid]
+        catch e:
+            create empty as Object
+            set empty to list()
+            boxes.update({pid: empty})
+
+    define function send that takes pid as Integer, msg as String:
+        self.ensure(pid)
+        create box as Object
+        set box to boxes[pid]
+        box.append(msg)
+
+    define function recv that takes pid as Integer:
+        self.ensure(pid)
+        create box as Object
+        set box to boxes[pid]
+        if len(box) == 0:
+            return ""
+        create first as Object
+        set first to box[0]
+        create rest as Object
+        set rest to list()
+        for i from 1 to len(box) - 1:
+            rest.append(box[i])
+        boxes.update({pid: rest})
+        return first
+
+    define function has_mail that takes pid as Integer:
+        self.ensure(pid)
+        create box as Object
+        set box to boxes[pid]
+        return len(box) > 0

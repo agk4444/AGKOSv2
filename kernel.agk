@@ -3,12 +3,17 @@
 import memory
 import process
 import fs
+import pipes
+import net
 
 define class Kernel:
     variable mem as Object
     variable sched as Object
     variable filesystem as Object
     variable ticks as Integer
+    variable current_pid as Integer
+    variable inboxes as Object
+    variable netsim as Object
 
     define constructor:
         create m as Object
@@ -21,6 +26,18 @@ define class Kernel:
         set f to FileSystem()
         set filesystem to f
         set ticks to 0
+        set current_pid to -1
+        create ib as Object
+        set ib to InboxTable()
+        set inboxes to ib
+        create ns as Object
+        set ns to NetSim()
+        set netsim to ns
+        netsim.add_host("web1", "10.0.0.2")
+        netsim.add_host("db1", "10.0.0.3")
+        netsim.add_host("dns1", "10.0.0.1")
+        netsim.add_page("http://web1/index.html", "<h1>hello from web1</h1>")
+        netsim.add_page("http://web1/about.html", "AGKOS web server v0.1")
 
     define function sys_print that takes text as String:
         print(text)
@@ -28,26 +45,74 @@ define class Kernel:
     define function sys_uptime:
         return ticks
 
+    define function note_current that takes pid as Integer:
+        set current_pid to pid
+
+    define function sys_sleep that takes n as Integer:
+        create idx as Object
+        set idx to sched.find_index(current_pid)
+        if idx < 0:
+            print("sleep: no current process")
+        else:
+            create p as Object
+            set p to sched.at(idx)
+            create pid as Object
+            set pid to p.pid
+            p.wake_at(ticks + n)
+            print("pid {pid} sleeping {n} ticks")
+
+    define function sys_send that takes target_pid as Integer, msg as String:
+        create idx as Object
+        set idx to sched.find_index(target_pid)
+        if idx < 0:
+            print("send: no such pid {target_pid}")
+        else:
+            inboxes.send(target_pid, msg)
+            print("sent to pid {target_pid}")
+
+    define function sys_recv:
+        create pid as Object
+        set pid to current_pid
+        if pid < 0:
+            return ""
+        return inboxes.recv(pid)
+
+    define function sys_ping that takes host as String:
+        return netsim.ping(host)
+
+    define function sys_fetch that takes url as String:
+        return netsim.fetch(url)
+
+    define function sys_lookup that takes name as String:
+        create procs as Object
+        set procs to sched.all()
+        for p in procs:
+            create nm as Object
+            set nm to p.name
+            if nm == name:
+                return p.pid
+        return -1
+
     define function sys_write_file that takes path as String, content as String:
         filesystem.write_file(path, content)
 
     define function sys_read_file that takes path as String:
         return filesystem.read_file(path)
 
-    define function spawn that takes name as String, prog as Object:
+    define function spawn that takes name as String, prog as Object, priority as Integer:
         create addr as Object
         set addr to mem.allocate(16)
         if addr < 0:
             print("kernel: out of memory, cannot spawn '{name}'")
             return -1
         create pid as Object
-        set pid to sched.spawn(name, prog, addr)
+        set pid to sched.spawn(name, prog, addr, priority)
         print("kernel: spawned '{name}' as pid {pid} (mem @{addr})")
         return pid
 
     define function cycle:
         create done as Object
-        set done to sched.cycle()
+        set done to sched.cycle(ticks, self)
         for p in done:
             mem.release(p.mem_addr)
             print("kernel: pid {p.pid} ('{p.name}') exited, freed mem @{p.mem_addr}")

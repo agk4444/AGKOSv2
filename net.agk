@@ -1,0 +1,62 @@
+# AGKOS virtual network simulator. Fully deterministic and simulated:
+# virtual hosts with DNS, and a tiny static web of pages. No real I/O.
+
+define class Host:
+    variable name as String
+    variable ip as String
+
+    define constructor that takes n as String, address as String:
+        set name to n
+        set ip to address
+
+
+define class NetSim:
+    variable hosts as Object
+    variable dns as Object
+    variable pages as Object
+    variable names as Object
+    variable page_urls as Object
+
+    define constructor:
+        set hosts to list()
+        set dns to dict()
+        set pages to dict()
+        set names to list()
+        set page_urls to list()
+
+    define function add_host that takes name as String, ip as String:
+        create h as Object
+        set h to Host(name, ip)
+        hosts.append(h)
+        dns.update({name: ip})
+        names.append(name)
+
+    define function add_page that takes url as String, body as String:
+        pages.update({url: body})
+        page_urls.append(url)
+
+    define function resolve that takes name as String:
+        for nm in names:
+            if nm == name:
+                return dns[nm]
+        raise "unknown host: {name}"
+
+    define function ping that takes host as String:
+        create ip as Object
+        set ip to self.resolve(host)
+        create lat as Object
+        set lat to (len(host) * 7) % 50 + 1
+        return "reply from {ip}: time={lat}ms"
+
+    define function fetch that takes url as String:
+        create parts as Object
+        set parts to url.split("/")
+        if len(parts) < 3:
+            raise "bad url: {url}"
+        create host as Object
+        set host to parts[2]
+        self.resolve(host)
+        for u in page_urls:
+            if u == url:
+                return pages[u]
+        raise "404 not found: {url}"

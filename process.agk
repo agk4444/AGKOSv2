@@ -9,16 +9,40 @@ define class Process:
     variable state as String
     variable prog as Object
     variable mem_addr as Integer
+    variable priority as Integer
+    variable sleep_until as Integer
+    variable cpu_ticks as Integer
 
-    define constructor that takes p as Integer, n as String, pr as Object, m as Integer:
+    define constructor that takes p as Integer, n as String, pr as Object, m as Integer, pri as Integer:
         set pid to p
         set name to n
         set state to "READY"
         set prog to pr
         set mem_addr to m
+        set priority to pri
+        set sleep_until to -1
+        set cpu_ticks to 0
 
     define function finish:
         set state to "DONE"
+
+    define function wake_at that takes t as Integer:
+        set sleep_until to t
+
+    define function add_cpu:
+        set cpu_ticks to cpu_ticks + 1
+
+    define function is_sleeping that takes now as Integer:
+        if sleep_until == -1:
+            return false
+        if now < sleep_until:
+            return true
+        return false
+
+    define function status that takes now as Integer:
+        if self.is_sleeping(now):
+            return "SLEEP"
+        return state
 
 
 define class Scheduler:
@@ -34,12 +58,27 @@ define class Scheduler:
     define function all:
         return procs
 
-    define function spawn that takes name as String, prog as Object, mem_addr as Integer:
+    define function spawn that takes name as String, prog as Object, mem_addr as Integer, priority as Integer:
         create p as Object
-        set p to Process(next_pid, name, prog, mem_addr)
-        procs.append(p)
+        set p to Process(next_pid, name, prog, mem_addr, priority)
+        create placed as Object
+        set placed to list()
+        create inserted as Boolean
+        set inserted to false
+        for q in procs:
+            if inserted == false:
+                if priority < q.priority:
+                    placed.append(p)
+                    set inserted to true
+            placed.append(q)
+        if inserted == false:
+            placed.append(p)
+        set procs to placed
         set next_pid to next_pid + 1
         return p.pid
+
+    define function at that takes idx as Integer:
+        return procs[idx]
 
     define function find_index that takes pid as Integer:
         for i from 0 to len(procs) - 1:
@@ -57,16 +96,21 @@ define class Scheduler:
                 kept.append(procs[i])
         set procs to kept
 
-    define function cycle:
+    define function cycle that takes now as Integer, k as Object:
         create done as Object
         set done to list()
         for p in procs:
             if p.state == "READY":
-                create alive as Object
-                set alive to p.prog.tick()
-                if alive == false:
-                    p.finish()
-                    done.append(p)
+                create sleeping as Boolean
+                set sleeping to p.is_sleeping(now)
+                if sleeping == false:
+                    k.note_current(p.pid)
+                    create alive as Object
+                    set alive to p.prog.tick()
+                    p.add_cpu()
+                    if alive == false:
+                        p.finish()
+                        done.append(p)
         return done
 
     define function sweep:

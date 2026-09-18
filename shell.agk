@@ -1,6 +1,7 @@
 # AGKOS interactive shell.
 
 import programs
+import fs
 
 define function join_from that takes parts as Object, start as Integer:
     create words as Object
@@ -13,25 +14,41 @@ define function join_from that takes parts as Object, start as Integer:
 define class Shell:
     variable k as Object
     variable running as Boolean
+    variable cwd as String
 
     define constructor that takes kernel as Object:
         set k to kernel
         set running to true
+        set cwd to "/"
 
     define function cmd_help:
         print("commands:")
         print("  ps                 list processes")
-        print("  run <prog> [n]     spawn counter | clock | writer (n ticks, default 5)")
+        print("  top                show process table (pid/name/state/pri/cpu)")
+        print("  run <prog> [n] [prio]  spawn counter | clock | writer | sleeper | netprobe (n ticks default 5, prio default 5)")
+        print("  run echoer [prio]  spawn a message echoer (prints anything sent to it)")
+        print("  run talker [n] [name] [prio]  send n pings to process 'name' (default echoer)")
+        print("  send <pid> <msg>   send a message to a process inbox")
         print("  kill <pid>         terminate a process")
         print("  tick [n]           advance the scheduler n cycles (default 5)")
         print("  mem                show memory usage")
-        print("  ls [path]          list a directory")
+        print("  pwd                show current directory")
+        print("  cd [path]          change directory (no arg = /)")
+        print("  ls [path]          list a directory (default: cwd)")
         print("  cat <path>         print a file")
         print("  write <path> ...   write text to a file")
         print("  mkdir <path>       make a directory")
+        print("  rm <path>          remove a file or directory")
+        print("  cp <src> <dst>     copy a file")
+        print("  mv <src> <dst>     move/rename a file")
+        print("  run_script <path>  execute commands from a file")
+        print("  save               persist filesystem to agkos-fs.json")
+        print("  ping <host>        ping a virtual network host")
+        print("  fetch <url>        fetch a page from the virtual web")
+        print("  hosts              list virtual network hosts")
         print("  echo <text>        print text")
         print("  uptime             show kernel ticks")
-        print("  shutdown           halt the system")
+        print("  shutdown           halt the system (persists filesystem)")
 
     define function cmd_ps:
         create procs as Object
@@ -49,9 +66,23 @@ define class Shell:
                 set ma to p.mem_addr
                 print("{pid}  {nm}  @{ma}")
 
+    define function cmd_top:
+        create procs as Object
+        set procs to k.sched.all()
+        create t as Object
+        set t to k.sys_uptime()
+        if len(procs) == 0:
+            print("no processes running")
+        else:
+            print("pid  name      state  pri  cpu")
+            for p in procs:
+                create st as Object
+                set st to p.status(t)
+                print("{p.pid}  {p.name}  {st}  {p.priority}  {p.cpu_ticks}")
+
     define function cmd_run that takes parts as Object:
         if len(parts) < 2:
-            print("usage: run counter|clock|writer [n]")
+            print("usage: run counter|clock|writer|sleeper|netprobe [n] [prio]")
         else:
             create prog as Object
             set prog to parts[1]
@@ -59,20 +90,55 @@ define class Shell:
             set n to 5
             if len(parts) >= 3:
                 set n to int(parts[2])
+            create prio as Object
+            set prio to 5
+            if prog == "talker":
+                if len(parts) >= 5:
+                    set prio to int(parts[4])
+            elif len(parts) >= 4:
+                set prio to int(parts[3])
             if prog == "counter":
                 create c as Object
                 set c to CounterProg(k, n)
-                k.spawn("counter", c)
+                k.spawn("counter", c, prio)
             elif prog == "clock":
                 create cl as Object
                 set cl to ClockProg(k, n)
-                k.spawn("clock", cl)
+                k.spawn("clock", cl, prio)
             elif prog == "writer":
                 create w as Object
                 set w to WriterProg(k, "/writer.log", n)
-                k.spawn("writer", w)
+                k.spawn("writer", w, prio)
+            elif prog == "sleeper":
+                create s as Object
+                set s to SleeperProg(k, n)
+                k.spawn("sleeper", s, prio)
+            elif prog == "echoer":
+                create e as Object
+                set e to EchoerProg(k)
+                k.spawn("echoer", e, prio)
+            elif prog == "talker":
+                create tname as Object
+                set tname to "echoer"
+                if len(parts) >= 4:
+                    set tname to parts[3]
+                create tpr as Object
+                set tpr to TalkerProg(k, tname, n)
+                k.spawn("talker", tpr, prio)
+            elif prog == "netprobe":
+                create np as Object
+                set np to NetProg(k, "web1", n)
+                k.spawn("netprobe", np, prio)
             else:
                 print("unknown program: {prog}")
+
+    define function cmd_send that takes parts as Object:
+        if len(parts) < 3:
+            print("usage: send <pid> <msg>")
+        else:
+            create pid as Object
+            set pid to int(parts[1])
+            k.sys_send(pid, join_from(parts, 2))
 
     define function cmd_kill that takes parts as Object:
         if len(parts) < 2:
@@ -111,11 +177,52 @@ define class Shell:
         set total to k.mem.total_size()
         print("memory: {free}/{total} blocks free")
 
+    define function cmd_ping that takes parts as Object:
+        if len(parts) < 2:
+            print("usage: ping <host>")
+        else:
+            create host as Object
+            set host to parts[1]
+            create r as Object
+            set r to ""
+            try:
+                set r to k.sys_ping(host)
+                print(r)
+            catch e:
+                print("ping: {e}")
+
+    define function cmd_fetch that takes parts as Object:
+        if len(parts) < 2:
+            print("usage: fetch <url>")
+        else:
+            create url as Object
+            set url to parts[1]
+            create body as Object
+            set body to ""
+            try:
+                set body to k.sys_fetch(url)
+                print(body)
+            catch e:
+                print("fetch: {e}")
+
+    define function cmd_hosts:
+        create hs as Object
+        set hs to k.netsim.hosts
+        if len(hs) == 0:
+            print("no hosts")
+        else:
+            for h in hs:
+                create nm as Object
+                set nm to h.name
+                create ip as Object
+                set ip to h.ip
+                print("{nm} -> {ip}")
+
     define function cmd_ls that takes parts as Object:
         create path as Object
-        set path to "/"
+        set path to cwd
         if len(parts) >= 2:
-            set path to parts[1]
+            set path to abspath(parts[1], cwd)
         try:
             create names as Object
             set names to k.filesystem.list_dir(path)
@@ -131,9 +238,11 @@ define class Shell:
         if len(parts) < 2:
             print("usage: cat <path>")
         else:
+            create ap as Object
+            set ap to abspath(parts[1], cwd)
             try:
                 create text as Object
-                set text to k.filesystem.read_file(parts[1])
+                set text to k.filesystem.read_file(ap)
                 print(text)
             catch e:
                 print("cat: {e}")
@@ -142,9 +251,11 @@ define class Shell:
         if len(parts) < 3:
             print("usage: write <path> <text>")
         else:
+            create ap as Object
+            set ap to abspath(parts[1], cwd)
             try:
-                k.filesystem.write_file(parts[1], join_from(parts, 2))
-                print("wrote {parts[1]}")
+                k.filesystem.write_file(ap, join_from(parts, 2))
+                print("wrote {ap}")
             catch e:
                 print("write: {e}")
 
@@ -152,11 +263,101 @@ define class Shell:
         if len(parts) < 2:
             print("usage: mkdir <path>")
         else:
+            create ap as Object
+            set ap to abspath(parts[1], cwd)
             try:
-                k.filesystem.mkdir(parts[1])
-                print("made {parts[1]}")
+                k.filesystem.mkdir(ap)
+                print("made {ap}")
             catch e:
                 print("mkdir: {e}")
+
+    define function cmd_pwd:
+        print(cwd)
+
+    define function cmd_cd that takes parts as Object:
+        create target as Object
+        set target to "/"
+        if len(parts) >= 2:
+            set target to abspath(parts[1], cwd)
+        try:
+            k.filesystem.list_dir(target)
+            set cwd to target
+        catch e:
+            print("cd: {e}")
+
+    define function cmd_rm that takes parts as Object:
+        if len(parts) < 2:
+            print("usage: rm <path>")
+        else:
+            create ap as Object
+            set ap to abspath(parts[1], cwd)
+            try:
+                k.filesystem.remove(ap)
+                print("removed {ap}")
+            catch e:
+                print("rm: {e}")
+
+    define function cmd_cp that takes parts as Object:
+        if len(parts) < 3:
+            print("usage: cp <src> <dst>")
+        else:
+            create src as Object
+            set src to abspath(parts[1], cwd)
+            create dst as Object
+            set dst to abspath(parts[2], cwd)
+            try:
+                k.filesystem.copy(src, dst)
+                print("copied {src} to {dst}")
+            catch e:
+                print("cp: {e}")
+
+    define function cmd_mv that takes parts as Object:
+        if len(parts) < 3:
+            print("usage: mv <src> <dst>")
+        else:
+            create src as Object
+            set src to abspath(parts[1], cwd)
+            create dst as Object
+            set dst to abspath(parts[2], cwd)
+            try:
+                k.filesystem.move(src, dst)
+                print("moved {src} to {dst}")
+            catch e:
+                print("mv: {e}")
+
+    define function cmd_run_script that takes parts as Object:
+        if len(parts) < 2:
+            print("usage: run_script <path>")
+        else:
+            create ap as Object
+            set ap to abspath(parts[1], cwd)
+            create text as Object
+            set text to ""
+            create ok as Object
+            set ok to true
+            try:
+                set text to k.filesystem.read_file(ap)
+            catch e:
+                print("run_script: {e}")
+                set ok to false
+            if ok:
+                create lines as Object
+                set lines to text.split("\n")
+                for line in lines:
+                    create comment as Object
+                    set comment to false
+                    if len(line) > 0:
+                        if line[0] == "#":
+                            set comment to true
+                    if line != "" and comment == false:
+                        self.dispatch(line)
+
+    define function cmd_save:
+        try:
+            k.filesystem.save("agkos-fs.json")
+            print("filesystem saved")
+        catch e:
+            print("save: {e}")
 
     define function dispatch that takes line as String:
         create parts as Object
@@ -169,14 +370,28 @@ define class Shell:
             self.cmd_help()
         elif parts[0] == "ps":
             self.cmd_ps()
+        elif parts[0] == "top":
+            self.cmd_top()
         elif parts[0] == "run":
             self.cmd_run(parts)
+        elif parts[0] == "send":
+            self.cmd_send(parts)
         elif parts[0] == "kill":
             self.cmd_kill(parts)
         elif parts[0] == "tick":
             self.cmd_tick(parts)
         elif parts[0] == "mem":
             self.cmd_mem()
+        elif parts[0] == "ping":
+            self.cmd_ping(parts)
+        elif parts[0] == "fetch":
+            self.cmd_fetch(parts)
+        elif parts[0] == "hosts":
+            self.cmd_hosts()
+        elif parts[0] == "pwd":
+            self.cmd_pwd()
+        elif parts[0] == "cd":
+            self.cmd_cd(parts)
         elif parts[0] == "ls":
             self.cmd_ls(parts)
         elif parts[0] == "cat":
@@ -185,6 +400,16 @@ define class Shell:
             self.cmd_write(parts)
         elif parts[0] == "mkdir":
             self.cmd_mkdir(parts)
+        elif parts[0] == "rm":
+            self.cmd_rm(parts)
+        elif parts[0] == "cp":
+            self.cmd_cp(parts)
+        elif parts[0] == "mv":
+            self.cmd_mv(parts)
+        elif parts[0] == "run_script":
+            self.cmd_run_script(parts)
+        elif parts[0] == "save":
+            self.cmd_save()
         elif parts[0] == "echo":
             print(join_from(parts, 1))
         elif parts[0] == "uptime":
@@ -204,7 +429,7 @@ define class Shell:
             create ok as Object
             set ok to true
             try:
-                set line to input("agk> ")
+                set line to input("{cwd} $ ")
             catch:
                 print("")
                 set ok to false
@@ -212,3 +437,8 @@ define class Shell:
             if ok:
                 self.dispatch(line)
                 k.cycle()
+        try:
+            k.filesystem.save("agkos-fs.json")
+        catch e:
+            create silent as Object
+            set silent to e
