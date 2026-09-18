@@ -1,0 +1,114 @@
+# AGKOS memory manager: fixed pool, first-fit allocation, coalescing free.
+
+define class MemBlock:
+    variable addr as Integer
+    variable size as Integer
+    variable used as Boolean
+
+    define constructor that takes a as Integer, s as Integer, u as Boolean:
+        set addr to a
+        set size to s
+        set used to u
+
+    define function get_addr:
+        return addr
+
+    define function get_size:
+        return size
+
+    define function is_free:
+        return used == false
+
+    define function mark_used:
+        set used to true
+
+    define function mark_free:
+        set used to false
+
+    define function shrink that takes n as Integer:
+        set size to n
+
+
+define class MemoryManager:
+    variable blocks as Object
+    variable total as Integer
+
+    define constructor that takes size as Integer:
+        set total to size
+        create bs as Object
+        set bs to list()
+        create b as Object
+        set b to MemBlock(0, size, false)
+        bs.append(b)
+        set blocks to bs
+
+    define function total_size:
+        return total
+
+    define function allocate that takes n as Integer:
+        for i from 0 to len(blocks) - 1:
+            create b as Object
+            set b to blocks[i]
+            if b.is_free():
+                if b.get_size() >= n:
+                    create addr as Object
+                    set addr to b.get_addr()
+                    if b.get_size() > n:
+                        create nb as Object
+                        set nb to MemBlock(addr + n, b.get_size() - n, false)
+                        b.shrink(n)
+                        blocks.insert(i + 1, nb)
+                    b.mark_used()
+                    return addr
+        return -1
+
+    define function release that takes addr as Integer:
+        for i from 0 to len(blocks) - 1:
+            create b as Object
+            set b to blocks[i]
+            if b.get_addr() == addr:
+                b.mark_free()
+        self.coalesce()
+
+    define function coalesce:
+        create merged as Object
+        set merged to list()
+        create i as Object
+        set i to 0
+        while i < len(blocks):
+            create b as Object
+            set b to blocks[i]
+            if b.is_free():
+                create span as Object
+                set span to b.get_size()
+                create j as Object
+                set j to i + 1
+                create more as Object
+                set more to true
+                while more:
+                    if j < len(blocks):
+                        create nb as Object
+                        set nb to blocks[j]
+                        if nb.is_free():
+                            set span to span + nb.get_size()
+                            set j to j + 1
+                        else:
+                            set more to false
+                    else:
+                        set more to false
+                create mb as Object
+                set mb to MemBlock(b.get_addr(), span, false)
+                merged.append(mb)
+                set i to j
+            else:
+                merged.append(b)
+                set i to i + 1
+        set blocks to merged
+
+    define function free_space:
+        create free as Object
+        set free to 0
+        for b in blocks:
+            if b.is_free():
+                set free to free + b.get_size()
+        return free

@@ -1,0 +1,137 @@
+# AGKOS virtual filesystem: in-memory tree of FsNodes.
+# Missing paths raise; callers use try/catch like real syscall errors.
+
+define function parent_of that takes path as String:
+    create parts as Object
+    set parts to path.split("/")
+    create out as Object
+    set out to list()
+    for i from 1 to len(parts) - 2:
+        out.append(parts[i])
+    return "/" + "/".join(out)
+
+
+define function base_of that takes path as String:
+    create parts as Object
+    set parts to path.split("/")
+    return parts[len(parts) - 1]
+
+
+define class FsNode:
+    variable name as String
+    variable is_dir as Boolean
+    variable content as String
+    variable children as Object
+
+    define constructor that takes n as String, d as Boolean:
+        set name to n
+        set is_dir to d
+        set content to ""
+        create ch as Object
+        set ch to list()
+        set children to ch
+
+    define function child_index that takes n as String:
+        for i from 0 to len(children) - 1:
+            create c as Object
+            set c to children[i]
+            if c.name == n:
+                return i
+        return -1
+
+    define function add_child that takes child as Object:
+        children.append(child)
+
+    define function set_content that takes t as String:
+        set content to t
+
+
+define class FileSystem:
+    variable root as Object
+
+    define constructor:
+        create r as Object
+        set r to FsNode("/", true)
+        set root to r
+
+    define function locate that takes path as String:
+        create parts as Object
+        set parts to path.split("/")
+        create node as Object
+        set node to root
+        for i from 1 to len(parts) - 1:
+            create part as Object
+            set part to parts[i]
+            if part != "":
+                create idx as Object
+                set idx to node.child_index(part)
+                if idx < 0:
+                    raise "no such file or directory: {path}"
+                set node to node.children[idx]
+        return node
+
+    define function exists that takes path as String:
+        try:
+            self.locate(path)
+            return true
+        catch:
+            return false
+
+    define function mkdir that takes path as String:
+        create parent as Object
+        set parent to parent_of(path)
+        create node as Object
+        set node to self.locate(parent)
+        if node.is_dir == false:
+            raise "not a directory: {parent}"
+        create name as Object
+        set name to base_of(path)
+        if node.child_index(name) >= 0:
+            raise "already exists: {path}"
+        create nd as Object
+        set nd to FsNode(name, true)
+        node.add_child(nd)
+
+    define function write_file that takes path as String, content as String:
+        create parent as Object
+        set parent to parent_of(path)
+        create node as Object
+        set node to self.locate(parent)
+        if node.is_dir == false:
+            raise "not a directory: {parent}"
+        create name as Object
+        set name to base_of(path)
+        create idx as Object
+        set idx to node.child_index(name)
+        if idx >= 0:
+            create target as Object
+            set target to node.children[idx]
+            if target.is_dir:
+                raise "is a directory: {path}"
+            target.set_content(content)
+        else:
+            create f as Object
+            set f to FsNode(name, false)
+            f.set_content(content)
+            node.add_child(f)
+
+    define function read_file that takes path as String:
+        create node as Object
+        set node to self.locate(path)
+        if node.is_dir:
+            raise "is a directory: {path}"
+        return node.content
+
+    define function list_dir that takes path as String:
+        create node as Object
+        set node to self.locate(path)
+        if node.is_dir == false:
+            raise "not a directory: {path}"
+        create names as Object
+        set names to list()
+        for c in node.children:
+            if c.is_dir:
+                names.append(c.name + "/")
+            else:
+                names.append(c.name)
+        return names

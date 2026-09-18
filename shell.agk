@@ -1,0 +1,214 @@
+# AGKOS interactive shell.
+
+import programs
+
+define function join_from that takes parts as Object, start as Integer:
+    create words as Object
+    set words to list()
+    for i from start to len(parts) - 1:
+        words.append(parts[i])
+    return " ".join(words)
+
+
+define class Shell:
+    variable k as Object
+    variable running as Boolean
+
+    define constructor that takes kernel as Object:
+        set k to kernel
+        set running to true
+
+    define function cmd_help:
+        print("commands:")
+        print("  ps                 list processes")
+        print("  run <prog> [n]     spawn counter | clock | writer (n ticks, default 5)")
+        print("  kill <pid>         terminate a process")
+        print("  tick [n]           advance the scheduler n cycles (default 5)")
+        print("  mem                show memory usage")
+        print("  ls [path]          list a directory")
+        print("  cat <path>         print a file")
+        print("  write <path> ...   write text to a file")
+        print("  mkdir <path>       make a directory")
+        print("  echo <text>        print text")
+        print("  uptime             show kernel ticks")
+        print("  shutdown           halt the system")
+
+    define function cmd_ps:
+        create procs as Object
+        set procs to k.sched.all()
+        if len(procs) == 0:
+            print("no processes running")
+        else:
+            print("pid  name     mem")
+            for p in procs:
+                create pid as Object
+                set pid to p.pid
+                create nm as Object
+                set nm to p.name
+                create ma as Object
+                set ma to p.mem_addr
+                print("{pid}  {nm}  @{ma}")
+
+    define function cmd_run that takes parts as Object:
+        if len(parts) < 2:
+            print("usage: run counter|clock|writer [n]")
+        else:
+            create prog as Object
+            set prog to parts[1]
+            create n as Object
+            set n to 5
+            if len(parts) >= 3:
+                set n to int(parts[2])
+            if prog == "counter":
+                create c as Object
+                set c to CounterProg(k, n)
+                k.spawn("counter", c)
+            elif prog == "clock":
+                create cl as Object
+                set cl to ClockProg(k, n)
+                k.spawn("clock", cl)
+            elif prog == "writer":
+                create w as Object
+                set w to WriterProg(k, "/writer.log", n)
+                k.spawn("writer", w)
+            else:
+                print("unknown program: {prog}")
+
+    define function cmd_kill that takes parts as Object:
+        if len(parts) < 2:
+            print("usage: kill <pid>")
+        else:
+            create pid as Object
+            set pid to int(parts[1])
+            create idx as Object
+            set idx to k.sched.find_index(pid)
+            if idx < 0:
+                print("no such pid: {pid}")
+            else:
+                create plist as Object
+                set plist to k.sched.all()
+                create p as Object
+                set p to plist[idx]
+                k.mem.release(p.mem_addr)
+                k.sched.remove_at(idx)
+                print("killed pid {pid}")
+
+    define function cmd_tick that takes parts as Object:
+        create n as Object
+        set n to 5
+        if len(parts) >= 2:
+            set n to int(parts[1])
+        for i from 1 to n:
+            k.cycle()
+        create t as Object
+        set t to k.sys_uptime()
+        print("advanced {n} cycles (uptime {t})")
+
+    define function cmd_mem:
+        create free as Object
+        set free to k.mem.free_space()
+        create total as Object
+        set total to k.mem.total_size()
+        print("memory: {free}/{total} blocks free")
+
+    define function cmd_ls that takes parts as Object:
+        create path as Object
+        set path to "/"
+        if len(parts) >= 2:
+            set path to parts[1]
+        try:
+            create names as Object
+            set names to k.filesystem.list_dir(path)
+            if len(names) == 0:
+                print("(empty)")
+            else:
+                for nm in names:
+                    print(nm)
+        catch e:
+            print("ls: {e}")
+
+    define function cmd_cat that takes parts as Object:
+        if len(parts) < 2:
+            print("usage: cat <path>")
+        else:
+            try:
+                create text as Object
+                set text to k.filesystem.read_file(parts[1])
+                print(text)
+            catch e:
+                print("cat: {e}")
+
+    define function cmd_write that takes parts as Object:
+        if len(parts) < 3:
+            print("usage: write <path> <text>")
+        else:
+            try:
+                k.filesystem.write_file(parts[1], join_from(parts, 2))
+                print("wrote {parts[1]}")
+            catch e:
+                print("write: {e}")
+
+    define function cmd_mkdir that takes parts as Object:
+        if len(parts) < 2:
+            print("usage: mkdir <path>")
+        else:
+            try:
+                k.filesystem.mkdir(parts[1])
+                print("made {parts[1]}")
+            catch e:
+                print("mkdir: {e}")
+
+    define function dispatch that takes line as String:
+        create parts as Object
+        set parts to line.split(" ")
+        if len(parts) == 0:
+            print("")
+        elif parts[0] == "":
+            print("")
+        elif parts[0] == "help":
+            self.cmd_help()
+        elif parts[0] == "ps":
+            self.cmd_ps()
+        elif parts[0] == "run":
+            self.cmd_run(parts)
+        elif parts[0] == "kill":
+            self.cmd_kill(parts)
+        elif parts[0] == "tick":
+            self.cmd_tick(parts)
+        elif parts[0] == "mem":
+            self.cmd_mem()
+        elif parts[0] == "ls":
+            self.cmd_ls(parts)
+        elif parts[0] == "cat":
+            self.cmd_cat(parts)
+        elif parts[0] == "write":
+            self.cmd_write(parts)
+        elif parts[0] == "mkdir":
+            self.cmd_mkdir(parts)
+        elif parts[0] == "echo":
+            print(join_from(parts, 1))
+        elif parts[0] == "uptime":
+            create t as Object
+            set t to k.sys_uptime()
+            print("uptime: {t} ticks")
+        elif parts[0] == "shutdown":
+            set running to false
+        else:
+            print("unknown command: {parts[0]} (try 'help')")
+
+    define function run:
+        print("AGKOS shell — type 'help'")
+        while running:
+            create line as Object
+            set line to ""
+            create ok as Object
+            set ok to true
+            try:
+                set line to input("agk> ")
+            catch:
+                print("")
+                set ok to false
+                set running to false
+            if ok:
+                self.dispatch(line)
+                k.cycle()

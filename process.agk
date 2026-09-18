@@ -1,0 +1,78 @@
+# AGKOS process table + cooperative round-robin scheduler.
+# A "process" is a program object with a tick() method. Each scheduler
+# cycle gives every READY process one tick. tick() returns false when
+# the program is done, and the kernel reaps it.
+
+define class Process:
+    variable pid as Integer
+    variable name as String
+    variable state as String
+    variable prog as Object
+    variable mem_addr as Integer
+
+    define constructor that takes p as Integer, n as String, pr as Object, m as Integer:
+        set pid to p
+        set name to n
+        set state to "READY"
+        set prog to pr
+        set mem_addr to m
+
+    define function finish:
+        set state to "DONE"
+
+
+define class Scheduler:
+    variable procs as Object
+    variable next_pid as Integer
+
+    define constructor:
+        create ps as Object
+        set ps to list()
+        set procs to ps
+        set next_pid to 1
+
+    define function all:
+        return procs
+
+    define function spawn that takes name as String, prog as Object, mem_addr as Integer:
+        create p as Object
+        set p to Process(next_pid, name, prog, mem_addr)
+        procs.append(p)
+        set next_pid to next_pid + 1
+        return p.pid
+
+    define function find_index that takes pid as Integer:
+        for i from 0 to len(procs) - 1:
+            create p as Object
+            set p to procs[i]
+            if p.pid == pid:
+                return i
+        return -1
+
+    define function remove_at that takes idx as Integer:
+        create kept as Object
+        set kept to list()
+        for i from 0 to len(procs) - 1:
+            if i != idx:
+                kept.append(procs[i])
+        set procs to kept
+
+    define function cycle:
+        create done as Object
+        set done to list()
+        for p in procs:
+            if p.state == "READY":
+                create alive as Object
+                set alive to p.prog.tick()
+                if alive == false:
+                    p.finish()
+                    done.append(p)
+        return done
+
+    define function sweep:
+        create kept as Object
+        set kept to list()
+        for p in procs:
+            if p.state == "READY":
+                kept.append(p)
+        set procs to kept

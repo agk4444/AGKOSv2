@@ -1,0 +1,22 @@
+# AGKOS boot sequence.
+
+import kernel
+import shell
+
+define function main:
+    print("AGKOS v0.1 — simulated OS on AGK-Real")
+    print("boot: probing memory...")
+    create k as Object
+    set k to Kernel()
+    print("boot: mounted /dev/mem0 (256 blocks)")
+    k.filesystem.mkdir("/home")
+    k.filesystem.mkdir("/bin")
+    k.filesystem.write_file("/readme.txt", "Welcome to AGKOS. Type 'help'.")
+    k.filesystem.write_file("/home/notes.txt", "AGK is all you need.")
+    print("boot: filesystem ready (/readme.txt, /home/notes.txt)")
+    print("boot: init complete")
+    print("")
+    create sh as Object
+    set sh to Shell(k)
+    sh.run()
+    print("AGKOS halted. bye.")

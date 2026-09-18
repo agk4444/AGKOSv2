@@ -1,0 +1,55 @@
+# AGKOS user programs. Each is a class with tick(): do a little work,
+# return true to stay alive, false to exit. Programs talk to hardware
+# only through kernel syscalls.
+
+define class CounterProg:
+    variable n as Integer
+    variable target as Integer
+    variable k as Object
+
+    define constructor that takes kernel as Object, t as Integer:
+        set n to 0
+        set target to t
+        set k to kernel
+
+    define function tick:
+        set n to n + 1
+        k.sys_print("counter: {n}/{target}")
+        return n < target
+
+
+define class ClockProg:
+    variable n as Integer
+    variable target as Integer
+    variable k as Object
+
+    define constructor that takes kernel as Object, t as Integer:
+        set n to 0
+        set target to t
+        set k to kernel
+
+    define function tick:
+        set n to n + 1
+        create t as Object
+        set t to k.sys_uptime()
+        k.sys_print("clock tick {n} (uptime {t})")
+        return n < target
+
+
+define class WriterProg:
+    variable n as Integer
+    variable target as Integer
+    variable k as Object
+    variable path as String
+
+    define constructor that takes kernel as Object, p as String, t as Integer:
+        set n to 0
+        set target to t
+        set k to kernel
+        set path to p
+
+    define function tick:
+        set n to n + 1
+        k.sys_write_file(path, "log line {n}")
+        k.sys_print("writer: wrote line {n} to {path}")
+        return n < target

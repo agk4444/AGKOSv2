@@ -1,0 +1,55 @@
+# AGKOS kernel: owns memory, scheduler, filesystem; exposes syscalls.
+
+import memory
+import process
+import fs
+
+define class Kernel:
+    variable mem as Object
+    variable sched as Object
+    variable filesystem as Object
+    variable ticks as Integer
+
+    define constructor:
+        create m as Object
+        set m to MemoryManager(256)
+        set mem to m
+        create s as Object
+        set s to Scheduler()
+        set sched to s
+        create f as Object
+        set f to FileSystem()
+        set filesystem to f
+        set ticks to 0
+
+    define function sys_print that takes text as String:
+        print(text)
+
+    define function sys_uptime:
+        return ticks
+
+    define function sys_write_file that takes path as String, content as String:
+        filesystem.write_file(path, content)
+
+    define function sys_read_file that takes path as String:
+        return filesystem.read_file(path)
+
+    define function spawn that takes name as String, prog as Object:
+        create addr as Object
+        set addr to mem.allocate(16)
+        if addr < 0:
+            print("kernel: out of memory, cannot spawn '{name}'")
+            return -1
+        create pid as Object
+        set pid to sched.spawn(name, prog, addr)
+        print("kernel: spawned '{name}' as pid {pid} (mem @{addr})")
+        return pid
+
+    define function cycle:
+        create done as Object
+        set done to sched.cycle()
+        for p in done:
+            mem.release(p.mem_addr)
+            print("kernel: pid {p.pid} ('{p.name}') exited, freed mem @{p.mem_addr}")
+        sched.sweep()
+        set ticks to ticks + 1
